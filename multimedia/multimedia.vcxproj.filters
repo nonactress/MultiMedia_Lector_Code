@@ -13,28 +13,37 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="소스 파일\AS">
+      <UniqueIdentifier>{323bc114-fe56-491a-82bf-6309f57f4add}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\Lec">
+      <UniqueIdentifier>{ee69ee12-0df5-44ce-9d80-35419229f886}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="week2-1.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="FileName.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="week3-1.cpp">
-      <Filter>소스 파일</Filter>
+    <ClCompile Include="week4-2.cpp">
+      <Filter>소스 파일\Lec</Filter>
     </ClCompile>
     <ClCompile Include="DP_Assignment1.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>소스 파일\AS</Filter>
     </ClCompile>
-    <ClCompile Include="week3-2.cpp">
-      <Filter>소스 파일</Filter>
+    <ClCompile Include="DP_Assignment2.cpp">
+      <Filter>소스 파일\AS</Filter>
+    </ClCompile>
+    <ClCompile Include="FileName.cpp">
+      <Filter>소스 파일\Lec</Filter>
+    </ClCompile>
+    <ClCompile Include="week2-1.cpp">
+      <Filter>소스 파일\Lec</Filter>
+    </ClCompile>
+    <ClCompile Include="week3-1.cpp">
+      <Filter>소스 파일\Lec</Filter>
     </ClCompile>
     <ClCompile Include="week4-1.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>소스 파일\Lec</Filter>
     </ClCompile>
-    <ClCompile Include="week4-2.cpp">
-      <Filter>소스 파일</Filter>
+    <ClCompile Include="week3-2.cpp">
+      <Filter>소스 파일\Lec</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
