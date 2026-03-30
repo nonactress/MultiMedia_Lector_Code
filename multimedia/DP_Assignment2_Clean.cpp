@@ -29,8 +29,9 @@ const char* INPUT_IMAGE_PATH = "c:\\MultiMedia\\AS2\\pg1.jpg";
 // Processing parameters
 const int BRIGHTNESS_LEVELS = 256;
 const int RGB_CHANNELS = 3;
-const int WINDOW_MAX_WIDTH = 1200;
-const int WINDOW_MAX_HEIGHT = 800;
+const int WINDOW_MAX_WIDTH = 1000;
+const int WINDOW_MAX_HEIGHT = 600;
+const int LIMITS_NEARBY = 5;  // Minimum distance between adjacent boundaries to prevent clustering
 
 // ============================================
 // [2] DATA STRUCTURES
@@ -48,7 +49,8 @@ struct ImageAnalysis {
 	int* diffY;     // Y-axis 1st derivative
 
 	// Standard deviation derivative
-	int* stddevDiff;  // Standard deviation 1st derivative (size: sizeY-1)
+	int* stddevDiff;   // Standard deviation 1st derivative (size: sizeY-1)
+	int* stddevDiff2;  // Standard deviation 2nd derivative (size: sizeY-2)
 
 	// Boundaries (12 total: Top 4 Red, Top 4 Green, Top 4 Blue)
 	int boundaries[12];  // Top 12 boundary positions with largest absolute values
@@ -77,6 +79,7 @@ ImageAnalysis* allocateAnalysis(int sizeX, int sizeY)
 	analysis->diffX = (int*)malloc(sizeof(int) * (sizeX - 1));
 	analysis->diffY = (int*)malloc(sizeof(int) * (sizeY - 1));
 	analysis->stddevDiff = (int*)malloc(sizeof(int) * (sizeY - 1));
+	analysis->stddevDiff2 = (int*)malloc(sizeof(int) * (sizeY - 2));
 	analysis->sizeX = sizeX;
 	analysis->sizeY = sizeY;
 	analysis->leftX = analysis->rightX = analysis->topY = analysis->bottomY = -1;
@@ -96,6 +99,7 @@ void freeAnalysis(ImageAnalysis* analysis)
 		free(analysis->diffX);
 		free(analysis->diffY);
 		free(analysis->stddevDiff);
+		free(analysis->stddevDiff2);
 		free(analysis);
 	}
 }
@@ -186,9 +190,21 @@ void stage_calculateStddevDiff(int* stdY, int* stddevDiff, int sizeY)
 	printf("[STAGE 2.5] Standard Deviation Diff calculated (%d changes)\n", sizeY - 1);
 }
 
+// === STAGE 2.7: SECOND DERIVATIVE OF STANDARD DEVIATION ===
+// Calculate 2nd derivative to detect sharp peaks (filter out gradual transitions)
+void stage_calculateStddevDiff2(int* stddevDiff, int* stddevDiff2, int sizeY)
+{
+	// stddevDiff2[y] = stddevDiff[y+1] - stddevDiff[y]
+	// This gives us "curvature" - where changes are most dramatic
+	for (int y = 0; y < sizeY - 2; y++) {
+		stddevDiff2[y] = stddevDiff[y + 1] - stddevDiff[y];
+	}
+	printf("[STAGE 2.7] Second Derivative calculated (%d changes)\n", sizeY - 2);
+}
+
 // === STAGE 3: FIND TOP 12 BOUNDARIES ===
 // Find top 12 boundary positions with largest absolute values and sort by Y-axis
-void stage_findTop12Boundaries(int* stddevDiff, int sizeY, int* boundaries)
+void stage_findTop12Boundaries(int* diff, int diffSize, int* boundaries)
 {
 	// Temporary arrays: store absolute values and positions
 	int tempPositions[12];
@@ -199,8 +215,8 @@ void stage_findTop12Boundaries(int* stddevDiff, int sizeY, int* boundaries)
 	}
 
 	// Step 1: Find top 12 positions with largest absolute values
-	for (int y = 0; y < sizeY - 1; y++) {
-		int absVal = abs(stddevDiff[y]);
+	for (int y = 0; y < diffSize; y++) {
+		int absVal = abs(diff[y]);
 
 		// Compare current value with top 12
 		for (int i = 0; i < 12; i++) {
@@ -235,15 +251,44 @@ void stage_findTop12Boundaries(int* stddevDiff, int sizeY, int* boundaries)
 		}
 	}
 
-	// Step 3: Copy to boundaries array
+	// Step 3: Filter out nearby boundaries (enforce minimum distance)
+	int finalBoundaries[12];
+	int finalAbsDiffs[12];
+	int finalCount = 0;
+
 	for (int i = 0; i < 12; i++) {
-		boundaries[i] = tempPositions[i];
+		if (tempPositions[i] == -1) continue;
+
+		// Check if too close to last selected boundary
+		if (finalCount > 0) {
+			if (abs(tempPositions[i] - finalBoundaries[finalCount - 1]) < LIMITS_NEARBY) {
+				// Too close, skip this one
+				printf("[FILTER] Skipping boundary at y=%d (too close to y=%d, distance=%d)\n",
+					tempPositions[i], finalBoundaries[finalCount - 1],
+					abs(tempPositions[i] - finalBoundaries[finalCount - 1]));
+				continue;
+			}
+		}
+
+		// Add this boundary
+		finalBoundaries[finalCount] = tempPositions[i];
+		finalAbsDiffs[finalCount] = tempAbsDiffs[i];
+		finalCount++;
 	}
 
-	// Step 4: Print results
-	printf("[STAGE 3] Top 12 Boundaries found:\n");
+	// Step 4: Copy to boundaries array (pad with -1 if needed)
 	for (int i = 0; i < 12; i++) {
-		printf("  Boundary[%d]: y=%d (absDiff=%d)\n", i, boundaries[i], tempAbsDiffs[i]);
+		if (i < finalCount) {
+			boundaries[i] = finalBoundaries[i];
+		} else {
+			boundaries[i] = -1;
+		}
+	}
+
+	// Step 5: Print results
+	printf("[STAGE 3] Top Boundaries found (after filtering with LIMITS_NEARBY=%d):\n", LIMITS_NEARBY);
+	for (int i = 0; i < finalCount; i++) {
+		printf("  Boundary[%d]: y=%d (absDiff=%d)\n", i, finalBoundaries[i], finalAbsDiffs[i]);
 	}
 }
 
@@ -304,8 +349,18 @@ void visualize_brightnessGraphX(ImageAnalysis* analysis)
 	IplImage* graph = cvCreateImage(cvSize(maxX, 400), 8, 3);
 	cvSet(graph, cvScalar(0, 0, 0));
 
+	// Step 1: Find maximum brightness value for normalization
+	int maxAvgX = 0;
+	for (int x = 0; x < analysis->sizeX; x++) {
+		if (analysis->avgX[x] > maxAvgX) {
+			maxAvgX = analysis->avgX[x];
+		}
+	}
+
+	// Step 2: Draw normalized graph
 	for (int x = 0; x < maxX && x < analysis->sizeX; x++) {
-		int y = 400 - (analysis->avgX[x] / 2);
+		// Normalize avgX value to fit within graph height (0-399)
+		int y = 399 - (analysis->avgX[x] * 399) / (maxAvgX > 0 ? maxAvgX : 1);
 		if (y >= 0 && y < 400) {
 			for (int dy = -2; dy <= 2; dy++) {
 				if (y + dy >= 0 && y + dy < 400) {
@@ -315,6 +370,7 @@ void visualize_brightnessGraphX(ImageAnalysis* analysis)
 		}
 	}
 
+	printf("[VISUALIZE] Brightness X - Max value: %d (normalized to 0-399)\n", maxAvgX);
 	showImageFit("Brightness X", graph, WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT);
 	cvReleaseImage(&graph);
 }
@@ -326,8 +382,18 @@ void visualize_brightnessGraphY(ImageAnalysis* analysis)
 	IplImage* graph = cvCreateImage(cvSize(800, analysis->sizeY), 8, 3);
 	cvSet(graph, cvScalar(0, 0, 0));
 
+	// Step 1: Find maximum brightness value for normalization
+	int maxAvgY = 0;
+	for (int y = 0; y < analysis->sizeY; y++) {
+		if (analysis->avgY[y] > maxAvgY) {
+			maxAvgY = analysis->avgY[y];
+		}
+	}
+
+	// Step 2: Draw normalized graph
 	for (int y = 0; y < maxY && y < analysis->sizeY; y++) {
-		int x = 400 - (analysis->avgY[y] / 2);
+		// Normalize avgY value to fit within graph width (0-799)
+		int x = (analysis->avgY[y] * 799) / (maxAvgY > 0 ? maxAvgY : 1);
 		if (x >= 0 && x < 800) {
 			for (int dx = -2; dx <= 2; dx++) {
 				if (x + dx >= 0 && x + dx < 800) {
@@ -337,7 +403,126 @@ void visualize_brightnessGraphY(ImageAnalysis* analysis)
 		}
 	}
 
+	printf("[VISUALIZE] Brightness Y - Max value: %d (normalized to 0-799)\n", maxAvgY);
 	showImageFit("Brightness Y", graph, WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT);
+	cvReleaseImage(&graph);
+}
+
+void visualize_stddevDiff2GraphY(ImageAnalysis* analysis)
+{
+	int maxY = analysis->sizeY;
+
+	IplImage* graph = cvCreateImage(cvSize(800, maxY - 2), 8, 3);
+	cvSet(graph, cvScalar(0, 0, 0));
+
+	// Step 1: Find maximum absolute stddevDiff2 value
+	int maxAbsDiff2 = 1;
+
+	for (int y = 0; y < maxY - 2; y++) {
+		int absDiff = abs(analysis->stddevDiff2[y]);
+		if (absDiff > maxAbsDiff2) {
+			maxAbsDiff2 = absDiff;
+		}
+	}
+
+	// Step 2: Draw graph using full width (0~799)
+	int centerX = 400;
+
+	for (int y = 0; y < maxY - 2; y++) {
+		int normValue = (analysis->stddevDiff2[y] * 399) / maxAbsDiff2;
+		int x = centerX + normValue;
+
+		if (x >= 0 && x < 800) {
+			CvScalar color;
+			if (analysis->stddevDiff2[y] >= 0) {
+				color = cvScalar(0, 255, 0);  // Green for positive
+			} else {
+				color = cvScalar(0, 0, 255);  // Red for negative
+			}
+
+			for (int dx = -1; dx <= 1; dx++) {
+				if (x + dx >= 0 && x + dx < 800) {
+					cvSet2D(graph, y, x + dx, color);
+				}
+			}
+		}
+
+		// Draw center line (white) at every 20th row
+		if (y % 20 == 0) {
+			cvSet2D(graph, y, centerX, cvScalar(255, 255, 255));
+		}
+	}
+
+	printf("[VISUALIZE] Standard Deviation 2nd Derivative Y\n");
+	printf("            Max Absolute Value: %d (normalized to full width 0~799)\n", maxAbsDiff2);
+	printf("            Center (400): 0 | Left (Red): Negative | Right (Green): Positive\n");
+	showImageFit("StdDev Diff2 Y", graph, WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT);
+	cvReleaseImage(&graph);
+}
+
+void visualize_stddevDiffGraphY(ImageAnalysis* analysis)
+{
+	int maxY = analysis->sizeY;
+
+	IplImage* graph = cvCreateImage(cvSize(800, maxY - 1), 8, 3);
+	cvSet(graph, cvScalar(0, 0, 0));
+
+	// Step 1: Find maximum positive and negative stddevDiff values separately
+	int maxPositive = 1;  // Initialize to 1 to avoid division by zero
+	int maxNegative = 1;
+
+	for (int y = 0; y < maxY - 1; y++) {
+		if (analysis->stddevDiff[y] > 0) {
+			if (analysis->stddevDiff[y] > maxPositive) {
+				maxPositive = analysis->stddevDiff[y];
+			}
+		} else if (analysis->stddevDiff[y] < 0) {
+			int absVal = abs(analysis->stddevDiff[y]);
+			if (absVal > maxNegative) {
+				maxNegative = absVal;
+			}
+		}
+	}
+
+	// Step 2: Draw graph with optimized space utilization
+	// Left side (0~399): Negative values (Red)
+	// Right side (400~799): Positive values (Green)
+	int centerX = 400;
+
+	for (int y = 0; y < maxY - 1; y++) {
+		int x;
+		CvScalar color;
+
+		if (analysis->stddevDiff[y] >= 0) {
+			// Map positive values to right side (400~799)
+			x = centerX + (analysis->stddevDiff[y] * 399) / maxPositive;
+			color = cvScalar(0, 255, 0);  // Green for positive
+		} else {
+			// Map negative values to left side (0~399)
+			int absVal = abs(analysis->stddevDiff[y]);
+			x = centerX - (absVal * 400) / maxNegative;
+			color = cvScalar(0, 0, 255);  // Red for negative
+		}
+
+		if (x >= 0 && x < 800) {
+			for (int dx = -1; dx <= 1; dx++) {
+				if (x + dx >= 0 && x + dx < 800) {
+					cvSet2D(graph, y, x + dx, color);
+				}
+			}
+		}
+
+		// Draw center line (white) at every 20th row for reference
+		if (y % 20 == 0) {
+			cvSet2D(graph, y, centerX, cvScalar(255, 255, 255));
+		}
+	}
+
+	printf("[VISUALIZE] Standard Deviation Diff Y\n");
+	printf("            Max Positive: %d (normalized to 400~799)\n", maxPositive);
+	printf("            Max Negative: %d (normalized to 0~399)\n", maxNegative);
+	printf("            Center (400): 0 | Left (Red): Negative | Right (Green): Positive\n");
+	showImageFit("StdDev Diff Y", graph, WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT);
 	cvReleaseImage(&graph);
 }
 
@@ -348,8 +533,18 @@ void visualize_stddevGraphY(ImageAnalysis* analysis)
 	IplImage* graph = cvCreateImage(cvSize(800, analysis->sizeY), 8, 3);
 	cvSet(graph, cvScalar(0, 0, 0));
 
+	// Step 1: Find maximum standard deviation value for normalization
+	int maxStdY = 0;
+	for (int y = 0; y < analysis->sizeY; y++) {
+		if (analysis->stdY[y] > maxStdY) {
+			maxStdY = analysis->stdY[y];
+		}
+	}
+
+	// Step 2: Draw normalized graph
 	for (int y = 0; y < maxY && y < analysis->sizeY; y++) {
-		int x = 400 - (analysis->stdY[y] / 2);
+		// Normalize stdY value to fit within graph width (0-799)
+		int x = (analysis->stdY[y] * 799) / (maxStdY > 0 ? maxStdY : 1);
 		if (x >= 0 && x < 800) {
 			for (int dx = -2; dx <= 2; dx++) {
 				if (x + dx >= 0 && x + dx < 800) {
@@ -359,6 +554,7 @@ void visualize_stddevGraphY(ImageAnalysis* analysis)
 		}
 	}
 
+	printf("[VISUALIZE] Standard Deviation Y - Max value: %d (normalized to 0-799)\n", maxStdY);
 	showImageFit("Standard Deviation Y", graph, WINDOW_MAX_WIDTH, WINDOW_MAX_HEIGHT);
 	cvReleaseImage(&graph);
 }
@@ -438,10 +634,16 @@ void pipeline_analyzeImage(IplImage* img, ImageAnalysis* analysis)
 	// STAGE 2.5: Calculate standard deviation derivative
 	printf("\n[STAGE 2.5] Standard Deviation Derivative\n");
 	stage_calculateStddevDiff(analysis->stdY, analysis->stddevDiff, analysis->sizeY);
+	visualize_stddevDiffGraphY(analysis);
 
-	// STAGE 3: Find top 12 boundaries
-	printf("\n[STAGE 3] Finding Top 12 Boundaries\n");
-	stage_findTop12Boundaries(analysis->stddevDiff, analysis->sizeY, analysis->boundaries);
+	// STAGE 2.7: Calculate 2nd derivative
+	printf("\n[STAGE 2.7] Standard Deviation 2nd Derivative\n");
+	stage_calculateStddevDiff2(analysis->stddevDiff, analysis->stddevDiff2, analysis->sizeY);
+	visualize_stddevDiff2GraphY(analysis);
+
+	// STAGE 3: Find top 12 boundaries (using 2nd derivative)
+	printf("\n[STAGE 3] Finding Top 12 Boundaries (using 2nd Derivative)\n");
+	stage_findTop12Boundaries(analysis->stddevDiff2, analysis->sizeY - 2, analysis->boundaries);
 
 	// STAGE 2: First derivative (edge detection)
 	printf("\n[STAGE 2] First Derivative (Edge Detection)\n");
