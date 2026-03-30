@@ -45,5 +45,20 @@
     <ClCompile Include="week3-2.cpp">
       <Filter>소스 파일\Lec</Filter>
     </ClCompile>
+    <ClCompile Include="asdf.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_FindVelley.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_v2.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_Variance.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_Clean.cpp">
+      <Filter>소스 파일\AS</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
