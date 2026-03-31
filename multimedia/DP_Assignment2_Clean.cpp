@@ -657,6 +657,38 @@ void pipeline_analyzeImage(IplImage* img, ImageAnalysis* analysis)
 
 	printf("\n========== PIPELINE END ==========\n");
 }
+int getBrightnessSum(CvScalar src)
+{
+	int sum = 0;
+	for (int k = 0; k < 2; k++)
+	{
+		sum += src.val[k];
+	}
+	return sum;
+}
+
+void visualizeImgByBoundingBox(IplImage* img,ImageAnalysis* analysis)
+{
+	IplImage* dst = cvCreateImage(cvSize(analysis->sizeX, analysis->sizeY), 8, 3);
+
+	int gapY = (analysis->bottomY - analysis->topY)/3;
+	int gapX = (analysis->rightX - analysis->leftX);
+
+	for (int y = analysis->topY; y < gapY; y++)
+	{
+		for (int x = analysis->leftX; x < gapX; x++)
+		{
+			CvScalar B = cvGet2D(img, y, x);
+			CvScalar G = cvGet2D(img, y+gapY, x);
+			CvScalar R = cvGet2D(img, y + gapY*2, x);
+
+			CvScalar sum = cvScalar(getBrightnessSum(R), getBrightnessSum(G), getBrightnessSum(B));
+			cvSet2D(dst, y, x, sum);
+		}
+	}
+	cvShowImage("box", dst);
+}
+
 
 // ============================================
 // [7] ENTRY POINT
@@ -684,9 +716,13 @@ int main()
 	visualize_boundaryBox(src, analysis);
 	visualize_detected_boundaries(src, analysis);
 
+	visualizeImgByBoundingBox(src, analysis);
+
 	// Wait for user input
 	printf("\nPress any key to exit...\n");
 	cvWaitKey();
+
+
 
 	// Cleanup
 	freeAnalysis(analysis);

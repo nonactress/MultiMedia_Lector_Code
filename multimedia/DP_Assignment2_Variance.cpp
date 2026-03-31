@@ -36,6 +36,8 @@ struct VarianceAnalysis {
 	int* diff2VarX;	// X축 분산의 2차 차분
 	int y1;			// Y축 첫 번째 경계 (RGB1과 RGB2 사이)
 	int y2;			// Y축 두 번째 경계 (RGB2와 RGB3 사이)
+	int x1;			// X축 첫 번째 경계 (left)
+	int x2;			// X축 두 번째 경계 (right)
 	int sizeX;		// 이미지 너비
 	int sizeY;		// 이미지 높이
 };
@@ -48,10 +50,14 @@ void calculateVarianceY(IplImage* img, VarianceAnalysis* analysis);
 void calculateVarianceX(IplImage* img, VarianceAnalysis* analysis);
 void findVarianceDiff(int* var, int* diffVar, int size);
 void findVarianceSecondDiff(int* diffVar, int* diff2Var, int size);
+void smoothArray(int* arr, int* smoothed, int size);
+void findLocalMaxima(int* diff2Var, int size, int threshold, int* pos1, int* pos2, int* val1, int* val2);
 void findVarianceYBoundaries(int* diff2VarY, int sizeY, int* y1, int* y2);
+void findVarianceXBoundaries(int* diff2VarX, int sizeX, int* x1, int* x2);
 void visualizeVarianceY(IplImage* img, VarianceAnalysis* analysis);
 void visualizeVarianceEdges(IplImage* src, VarianceAnalysis* analysis);
 void extractRGBChannels(IplImage* img, CvSize size, int y1, int y2, IplImage* dst);
+void visualizeBoundingBoxAsRGB(IplImage* src, VarianceAnalysis* analysis);
 
 /*
 	allocateVarianceAnalysis
@@ -70,6 +76,8 @@ VarianceAnalysis* allocateVarianceAnalysis(int sizeX, int sizeY)
 	analysis->sizeY = sizeY;
 	analysis->y1 = -1;
 	analysis->y2 = -1;
+	analysis->x1 = -1;
+	analysis->x2 = -1;
 	return analysis;
 }
 
@@ -262,6 +270,70 @@ void findVarianceSecondDiff(int* diffVar, int* diff2Var, int size)
 }
 
 /*
+	smoothArray
+	목적: 2차 차분 배열의 노이즈를 median filter로 제거
+	동작:
+		- 3-point median filter 적용
+		- 급격한 스파이크 제거하면서 경계 정보 보존
+*/
+void smoothArray(int* arr, int* smoothed, int size)
+{
+	for (int i = 0; i < size; i++) {
+		if (i < 1 || i >= size - 1) {
+			smoothed[i] = arr[i];  // 경계 부분은 원본 유지
+			continue;
+		}
+
+		// 3개 값 정렬해서 median 선택
+		int vals[3] = { arr[i - 1], arr[i], arr[i + 1] };
+
+		// 간단한 bubble sort (3개만 정렬)
+		if (vals[0] > vals[1]) { int tmp = vals[0]; vals[0] = vals[1]; vals[1] = tmp; }
+		if (vals[1] > vals[2]) { int tmp = vals[1]; vals[1] = vals[2]; vals[2] = tmp; }
+		if (vals[0] > vals[1]) { int tmp = vals[0]; vals[0] = vals[1]; vals[1] = tmp; }
+
+		smoothed[i] = vals[1];  // median 값
+	}
+}
+
+/*
+	findLocalMaxima
+	목적: threshold 이상의 모든 피크를 찾아서 위치와 값을 반환
+	동작:
+		- threshold 이상인 구간 찾기
+		- 가장 큰 2개 피크의 위치와 값 반환
+*/
+void findLocalMaxima(int* diff2Var, int size, int threshold, int* pos1, int* pos2, int* val1, int* val2)
+{
+	*pos1 = -1; *pos2 = -1;
+	*val1 = 0; *val2 = 0;
+
+	int maxVal1 = -1000, maxPos1 = -1;
+	int maxVal2 = -1000, maxPos2 = -1;
+
+	for (int i = 0; i < size - 1; i++) {
+		int peakVal = abs(diff2Var[i] - diff2Var[i + 1]);
+
+		if (peakVal > threshold) {
+			if (peakVal > maxVal1) {
+				maxVal2 = maxVal1;
+				maxPos2 = maxPos1;
+				maxVal1 = peakVal;
+				maxPos1 = i;
+			} else if (peakVal > maxVal2) {
+				maxVal2 = peakVal;
+				maxPos2 = i;
+			}
+		}
+	}
+
+	*pos1 = maxPos1;
+	*pos2 = maxPos2;
+	*val1 = maxVal1;
+	*val2 = maxVal2;
+}
+
+/*
 	findVarianceYBoundaries
 	목적: Y축 분산의 2차 차분에서 2개의 가장 큰 피크를 찾아 Y1, Y2 경계 검출
 	동작:
@@ -305,6 +377,49 @@ void findVarianceYBoundaries(int* diff2VarY, int sizeY, int* y1, int* y2)
 }
 
 /*
+	findVarianceXBoundaries
+	목적: X축 분산의 2차 차분에서 2개의 가장 큰 피크를 찾아 X1, X2 경계 검출
+	동작:
+		- threshold 이상의 피크를 모두 찾기
+		- 가장 큰 2개만 선택
+		- x1 < x2 보장
+*/
+void findVarianceXBoundaries(int* diff2VarX, int sizeX, int* x1, int* x2)
+{
+	*x1 = -1;
+	*x2 = -1;
+
+	int maxVal1 = -1000, maxPos1 = -1;  // 가장 큰 피크
+	int maxVal2 = -1000, maxPos2 = -1;  // 두 번째 큰 피크
+
+	for (int x = 0; x < sizeX - 1; x++) {
+		int val = abs(diff2VarX[x] - diff2VarX[x + 1]);
+
+		if (val > THRESHOLD) {
+			if (val > maxVal1) {
+				maxVal2 = maxVal1;
+				maxPos2 = maxPos1;
+				maxVal1 = val;
+				maxPos1 = x;
+			} else if (val > maxVal2) {
+				maxVal2 = val;
+				maxPos2 = x;
+			}
+		}
+	}
+
+	// 위치 정렬 (x1 < x2)
+	if (maxPos1 >= 0 && maxPos2 >= 0) {
+		*x1 = (maxPos1 < maxPos2) ? maxPos1 : maxPos2;
+		*x2 = (maxPos1 < maxPos2) ? maxPos2 : maxPos1;
+	} else if (maxPos1 >= 0) {
+		*x1 = maxPos1;
+	}
+
+	printf("Variance X Boundaries: x1=%d, x2=%d\n", *x1, *x2);
+}
+
+/*
 	visualizeVarianceY
 	목적: Y축 분산과 경계선을 시각화
 */
@@ -331,7 +446,8 @@ void visualizeVarianceY(IplImage* img, VarianceAnalysis* analysis)
 
 /*
 	visualizeVarianceEdges
-	목적: 분산 2차 차분에서 threshold 이상의 모든 피크에 선 그리기
+	목적: 분산 2차 차분에서 threshold 이상의 피크에 선 그리기
+		   (boundingbox 범위 내에서만 검출)
 */
 void visualizeVarianceEdges(IplImage* src, VarianceAnalysis* analysis)
 {
@@ -340,19 +456,25 @@ void visualizeVarianceEdges(IplImage* src, VarianceAnalysis* analysis)
 	IplImage* display = cvCreateImage(cvGetSize(src), 8, 3);
 	cvCopy(src, display);
 
-	// Y축 모든 경계 (수평선)
-	for (int y = 0; y < analysis->sizeY - 3; y++) {
+	// boundingbox 범위 설정
+	int startY = (analysis->y1 >= 0) ? analysis->y1 : 0;
+	int endY = (analysis->y2 >= 0) ? analysis->y2 : analysis->sizeY - 1;
+	int startX = (analysis->x1 >= 0) ? analysis->x1 : 0;
+	int endX = (analysis->x2 >= 0) ? analysis->x2 : analysis->sizeX - 1;
+
+	// Y축 경계 (수평선) - boundingbox 내에서만
+	for (int y = startY; y < endY && y < analysis->sizeY - 3; y++) {
 		if (abs(analysis->diff2VarY[y] - analysis->diff2VarY[y + 1]) > THRESHOLD) {
-			for (int x = 0; x < display->width; x++) {
+			for (int x = startX; x <= endX && x < display->width; x++) {
 				cvSet2D(display, y, x, cvScalar(255, 0, 0));  // 빨간색
 			}
 		}
 	}
 
-	// X축 모든 경계 (수직선)
-	for (int x = 0; x < analysis->sizeX - 3; x++) {
+	// X축 경계 (수직선) - boundingbox 내에서만
+	for (int x = startX; x < endX && x < analysis->sizeX - 3; x++) {
 		if (abs(analysis->diff2VarX[x] - analysis->diff2VarX[x + 1]) > THRESHOLD) {
-			for (int y = 0; y < display->height; y++) {
+			for (int y = startY; y <= endY && y < display->height; y++) {
 				cvSet2D(display, y, x, cvScalar(255, 0, 0));  // 빨간색
 			}
 		}
@@ -406,6 +528,68 @@ void extractRGBChannels(IplImage* img, CvSize size, int y1, int y2, IplImage* ds
 }
 
 /*
+	visualizeBoundingBoxAsRGB
+	목적: boundingbox를 Y축으로 3등분하여 각 부분의 평균 밝기를 R,G,B로 변환
+	동작:
+		- 상단(y1~y1+h/3) → R 채널 데이터
+		- 중간(y1+h/3~y1+2h/3) → G 채널 데이터
+		- 하단(y1+2h/3~y2) → B 채널 데이터
+*/
+void visualizeBoundingBoxAsRGB(IplImage* src, VarianceAnalysis* analysis)
+{
+	if (!src || !analysis) return;
+	if (analysis->x1 < 0 || analysis->x2 < 0 || analysis->y1 < 0 || analysis->y2 < 0) return;
+
+	int width = analysis->x2 - analysis->x1;
+	int height = analysis->y2 - analysis->y1;
+	int pieceH = height / 3;
+
+	int r = 0, g = 0, b = 0;
+	int cnt;
+
+	// R piece (상단)
+	cnt = 0;
+	for (int y = analysis->y1; y < analysis->y1 + pieceH; y++) {
+		for (int x = analysis->x1; x < analysis->x2; x++) {
+			CvScalar p = cvGet2D(src, y, x);
+			r += (p.val[0] + p.val[1] + p.val[2]) / 3;
+			cnt++;
+		}
+	}
+	r = (cnt > 0) ? r / cnt : 0;
+
+	// G piece (중간)
+	cnt = 0;
+	for (int y = analysis->y1 + pieceH; y < analysis->y1 + 2 * pieceH; y++) {
+		for (int x = analysis->x1; x < analysis->x2; x++) {
+			CvScalar p = cvGet2D(src, y, x);
+			g += (p.val[0] + p.val[1] + p.val[2]) / 3;
+			cnt++;
+		}
+	}
+	g = (cnt > 0) ? g / cnt : 0;
+
+	// B piece (하단)
+	cnt = 0;
+	for (int y = analysis->y1 + 2 * pieceH; y < analysis->y2; y++) {
+		for (int x = analysis->x1; x < analysis->x2; x++) {
+			CvScalar p = cvGet2D(src, y, x);
+			b += (p.val[0] + p.val[1] + p.val[2]) / 3;
+			cnt++;
+		}
+	}
+	b = (cnt > 0) ? b / cnt : 0;
+
+	printf("BoundingBox RGB: R=%d, G=%d, B=%d\n", r, g, b);
+
+	// 결과 표시
+	IplImage* result = cvCreateImage(cvSize(200, 200), 8, 3);
+	cvSet(result, cvScalar(b, g, r));  // OpenCV는 BGR 순서
+	showImageFit("Extracted RGB", result);
+	cvReleaseImage(&result);
+}
+
+/*
 	main
 */
 int main()
@@ -423,22 +607,26 @@ int main()
 	printf("=== Variance-Based Edge Detection ===\n");
 	printf("Image size: %d x %d\n", size.width, size.height);
 
-	// Y축 분석 (RGB 분리용)
-	printf("\n[Y-Axis Analysis]\n");
+	// Y축 분석 - Y 경계 검출 (boundingbox 상하)
+	printf("\n[Y축 분석]\n");
 	calculateVarianceY(src, analysis);
 	findVarianceDiff(analysis->varY, analysis->diffVarY, analysis->sizeY);
 	findVarianceSecondDiff(analysis->diffVarY, analysis->diff2VarY, analysis->sizeY - 1);
 	findVarianceYBoundaries(analysis->diff2VarY, analysis->sizeY - 2, &analysis->y1, &analysis->y2);
 	visualizeVarianceY(src, analysis);
 
-	// X축 분석 (정보용)
-	printf("\n[X-Axis Analysis]\n");
+	// X축 분석 - X 경계 검출 (boundingbox 좌우)
+	printf("\n[X축 분석]\n");
 	calculateVarianceX(src, analysis);
 	findVarianceDiff(analysis->varX, analysis->diffVarX, analysis->sizeX);
 	findVarianceSecondDiff(analysis->diffVarX, analysis->diff2VarX, analysis->sizeX - 1);
+	findVarianceXBoundaries(analysis->diff2VarX, analysis->sizeX - 2, &analysis->x1, &analysis->x2);
 
-	// 모든 edge 시각화
+	// boundingbox 내에서만 edge 검출 및 시각화
 	visualizeVarianceEdges(src, analysis);
+
+	// boundingbox를 3등분하여 RGB 합성
+	visualizeBoundingBoxAsRGB(src, analysis);
 
 	// RGB 채널 분리 (Y1, Y2 기반)
 	if (analysis->y1 >= 0 && analysis->y2 >= 0) {
