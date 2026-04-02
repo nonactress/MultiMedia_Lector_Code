@@ -19,16 +19,19 @@
     <Filter Include="소스 파일\Lec">
       <UniqueIdentifier>{ee69ee12-0df5-44ce-9d80-35419229f886}</UniqueIdentifier>
     </Filter>
+    <Filter Include="소스 파일\AS\2">
+      <UniqueIdentifier>{8bd542dc-f8d9-402d-8bfe-48144c758179}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\AS\1">
+      <UniqueIdentifier>{45d3963e-966a-4b16-95de-b8736606ba91}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\notebook">
+      <UniqueIdentifier>{f668a66f-19f8-4685-bbb4-af0c64556ce2}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="week4-2.cpp">
       <Filter>소스 파일\Lec</Filter>
-    </ClCompile>
-    <ClCompile Include="DP_Assignment1.cpp">
-      <Filter>소스 파일\AS</Filter>
-    </ClCompile>
-    <ClCompile Include="DP_Assignment2.cpp">
-      <Filter>소스 파일\AS</Filter>
     </ClCompile>
     <ClCompile Include="FileName.cpp">
       <Filter>소스 파일\Lec</Filter>
@@ -45,20 +48,35 @@
     <ClCompile Include="week3-2.cpp">
       <Filter>소스 파일\Lec</Filter>
     </ClCompile>
-    <ClCompile Include="asdf.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="DP_Assignment2_FindVelley.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="DP_Assignment2_v2.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
-    <ClCompile Include="DP_Assignment2_Variance.cpp">
-      <Filter>소스 파일</Filter>
+    <ClCompile Include="week5-1.cpp">
+      <Filter>소스 파일\Lec</Filter>
     </ClCompile>
     <ClCompile Include="DP_Assignment2_Clean.cpp">
-      <Filter>소스 파일\AS</Filter>
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_FindVelley.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_v2.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment2_Variance.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="DP_Assignment1.cpp">
+      <Filter>소스 파일\AS\1</Filter>
+    </ClCompile>
+    <ClCompile Include="asdf.cpp">
+      <Filter>소스 파일\notebook</Filter>
+    </ClCompile>
+    <ClCompile Include="assignment2_hint.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="howtofindSSD.cpp">
+      <Filter>소스 파일\notebook</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
