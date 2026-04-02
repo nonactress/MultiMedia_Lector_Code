@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Visual Studio C++ project for multimedia programming, specifically focused on image processing with OpenCV. The repository contains multiple programming assignments and weekly exercises, likely for a computer science course or self-directed learning on image processing.
+This is a Visual Studio C++ project for multimedia programming, specifically focused on image processing with OpenCV. The main focus is on the **Prokudin-Gorsky Color Restoration** assignment (Assignment 2), which reconstructs color images from three vertically stacked grayscale channel images using SSD (Sum of Squared Differences) alignment.
 
 ### Key Technologies
 - **Language**: C++ (C++11/14, Visual Studio 2022 compatible)
@@ -15,14 +15,29 @@ This is a Visual Studio C++ project for multimedia programming, specifically foc
 
 ## File Organization
 
-All source files are located in the `multimedia/` directory. The project structure reflects course progression:
+All source files are located in the `multimedia/` directory:
 
-- **Assignment Files**: `DP_Assignment1.cpp`, `DP_Assignment2.cpp` — formal assignments
-- **Weekly Exercises**: `week2-1.cpp`, `week3-1.cpp`, `week3-2.cpp`, `week4-1.cpp`, `week4-2.cpp` — weekly programming exercises
-- **Utilities**: `FileName.cpp`, `adjBriAndContrast.cpp` — utility programs (various image processing operations)
-- **Project Files**: `multimedia.vcxproj` — Visual Studio project configuration
+### Active Project
+- **`howtofindSSD.cpp`** — **Main file** (currently active build target)
+  - Implements SSD-based channel alignment for Prokudin-Gorsky color restoration
+  - Brute-force search for optimal (dx, dy) offsets
 
-Currently, `DP_Assignment2.cpp` is the active build target (not excluded from build). All other `.cpp` files are excluded from the Debug|Win32 build configuration, allowing multiple implementations in the same project while building only the selected one.
+### Prokudin-Gorsky Color Restoration Variants
+Multiple implementations exploring different approaches (see `Assignment2_Summary.md` for detailed documentation):
+- **`asdf.cpp`** — Baseline working version with val[0] direct comparison
+- **`assignment2_hint.cpp`** — Variance-based boundary detection + SSD alignment
+- **`DP_Assignment2_Variance.cpp`** — Variance-focused boundary detection
+- **`DP_Assignment2_FindVelley.cpp`** — Valley-finding approach for boundaries
+- **`DP_Assignment2_Clean.cpp`** — Cleaned-up variant
+- **`DP_Assignment2_v2.cpp`** — Alternative implementation
+
+### Other Files
+- **Assignment Files**: `DP_Assignment1.cpp` — other formal assignment
+- **Weekly Exercises**: `week2-1.cpp`, `week3-1.cpp`, `week3-2.cpp`, `week4-1.cpp`, `week4-2.cpp`, `week5-1.cpp`, `week5-2.cpp`
+- **Utilities**: `FileName.cpp`, `adjBriAndContrast.cpp` — helper utilities
+- **Documentation**: `Assignment2_Summary.md` — detailed project analysis and approach documentation
+
+Currently, `howtofindSSD.cpp` is the active build target. All other `.cpp` files are excluded from the Debug|Win32 build configuration.
 
 ## Building and Running
 
@@ -63,70 +78,115 @@ The project depends on OpenCV 2.3.0, which uses the legacy IplImage C API (not t
 
 If OpenCV is not installed at the default path, update the include and library paths in the project properties (Debug|Win32 configuration).
 
-## Architecture
+## Architecture: Prokudin-Gorsky Color Restoration
 
-### Image Processing Pipeline (DP_Assignment2)
-The main assignment demonstrates image analysis with boundary detection and ROI extraction:
+### Project Goal
+Reconstruct a color image from three grayscale channel images (Blue, Green, Red) stacked vertically in a single image file using SSD alignment.
 
-1. **Brightness Analysis**: Compute average brightness along X and Y axes using `brightnessAvgX()` and `brightnessAvgY()`
-2. **Edge Detection**: Calculate first-order differences using `findEdge()` to detect brightness transitions
-3. **Boundary Detection**: Scan diff arrays to locate ROI edges using `findBoundary()`:
-   - **Minimum value** (negative peak) → left/top boundary
-   - **Maximum value** (positive peak) → right/bottom boundary
-4. **Second-Order Derivative**: Compute second-order differences with `findSecondDiff()` to locate peak changes (curvature analysis)
-5. **ROI Visualization & Extraction**:
-   - `visualizeBoundaryBox()` — overlay boundary rectangle on original image
-   - `cropByBoundary()` — extract the detected ROI region
-6. **RGB Channel Extraction**: Separate and recombine RGB channels with `extractRGBChannels()`
+**Input:** Single image with B/G/R channels stacked vertically (height = 3N)
+**Output:** Aligned and merged color RGB image
 
-**Key Data Structure**: `ImageAnalysis` struct holds pre-allocated arrays and boundary coordinates:
-- Arrays: `avgX`, `avgY` — brightness averages per row/column
-- Arrays: `diffX`, `diffY` — first derivatives (brightness changes)
-- Arrays: `diff2X`, `diff2Y` — second derivatives (curvature indicators)
-- Boundaries: `leftX`, `rightX`, `topY`, `bottomY` — detected ROI edges (-1 if not detected)
+### Core Algorithm (SSD-based Channel Alignment)
+
+#### 1. Channel Separation
+- Split input image into 3 equal-height regions (or detect boundaries via variance analysis)
+- Extract Blue, Green, Red channel images
+
+#### 2. SSD Alignment Search
+**SSD (Sum of Squared Differences):** Measure pixel-level difference between channel pairs
+```
+SSD(offset_dy, offset_dx) = Σ(Green[y,x] - Channel[y+offset_dy, x+offset_dx])²
+```
+
+**Brute-force search:**
+- Iterate over offset range: `dy, dx ∈ [-100, +100]` (20,401 iterations per channel)
+- For each offset, compute SSD across entire channel region
+- Track minimum error and corresponding offset
+- Result: `(optimalDy, optimalDx)` for Blue and Red channels
+
+#### 3. Channel Merging
+Synthesize RGB image using detected offsets:
+```
+result[y][x] = (B=chB[y+bestDy_B][x+bestDx_B], 
+                 G=chG[y][x], 
+                 R=chR[y+bestDy_R][x+bestDx_R])
+```
+With boundary checks to handle out-of-bounds pixels (default to 0/black).
+
+### Evolution of Approaches (See `Assignment2_Summary.md` for details)
+
+| Approach | Method | Benefit | Status |
+|----------|--------|---------|--------|
+| **1** | Simple height/3 + brute-force SSD | Baseline working | ✅ Core |
+| **2** | Variance-based boundary detection | Remove black borders | ✅ Integrated |
+| **3** | Sobel edge preprocessing | Exposure-robust alignment | ❌ Abandoned |
+| **4** | Pyramid 2-level search | 4-5x speedup | ❌ Reverted |
+| **5** | asdf.cpp style refactoring | Code clarity, consistency | ✅ Applied |
 
 ### Important Architectural Notes
-- Uses legacy OpenCV 2.3.0 IplImage API (`cvCreateImage`, `cvSet2D`, `cvLoadImage`, etc.)
+- Uses legacy OpenCV 2.3.0 IplImage API (`cvCreateImage`, `cvSet2D`, `cvLoadImage`, `cvGet2D`)
 - Manual memory management with `malloc`/`free` (not C++ `new`/`delete`)
-- Boundary detection (`findBoundary()`) scans entire diff array to find global min/max positions
-- ROI extraction uses `cvSetImageROI()` for efficient cropping without full image copying
-- All image windows are displayed with `cvShowImage()` and require `cvWaitKey()` to remain open
+- SSD computation uses `val[0]` direct channel access (assumes grayscale channel images)
+- Boundary checks prevent out-of-bounds pixel access; out-of-bounds = 0 (black)
+- All image windows displayed with `cvShowImage()` require `cvWaitKey()` to keep open
 - Hard-coded image path: `c:\MultiMedia\AS2\pg1.jpg` (update as needed)
+
+### Known Issues
+- **Offset range limits:** Fixed ±100 pixel range; may miss optimal alignment if offset > 100
+- **Computation cost:** 20,401 iterations × image pixels per channel (significant for large images)
+- **Boundary detection:** Variance-based method may fail on some image types; fallback to simple height/3
+- **Memory management:** Ensure all allocated images freed with `cvReleaseImage()` to avoid leaks
 
 ## Development Notes
 
-- **Excluded Files**: Most `.cpp` files are excluded from the Debug|Win32 build. To switch which file builds, edit `multimedia.vcxproj` and toggle the `ExcludedFromBuild` property for each file.
-- **Debug Output**: The code uses `printf()` for debug output (e.g., edge detection thresholds).
-- **Window Management**: Image display windows require `cvWaitKey()` to keep them visible; use `cvReleaseImage()` to free resources.
-- **Memory Leaks**: Carefully manage OpenCV image allocations with `cvReleaseImage()` and struct allocations with `freeAnalysis()`.
-- **Hard-Coded Paths**: Image file paths are hard-coded in `main()`. Update the path when testing with different images.
+- **Excluded Files**: Most `.cpp` files are excluded from the Debug|Win32 build. Only the file with `ExcludedFromBuild=false` builds.
+- **OpenCV Configuration**: Include/Library paths and dependencies currently only configured for **Debug|Win32**. Other configurations (Release|Win32, Debug|x64, Release|x64) need manual setup if used.
+- **Debug Output**: Use `printf()` for debug output. Appears in Visual Studio Output window or console.
+- **Window Management**: Image windows require `cvWaitKey()` to remain visible; use `cvReleaseImage()` to free allocated images.
+- **Memory Management**: Allocate images with `cvCreateImage()`, free with `cvReleaseImage()`. No memory leak issues if properly paired.
+- **Hard-Coded Paths**: Image path (`c:\MultiMedia\AS2\pg1.jpg`) is hard-coded in `main()`. Update when testing different images.
+- **Pixel Access**: Use `cvGet2D(img, y, x)` to read pixel values; returns `CvScalar` with `val[0]` for intensity (assumes grayscale).
 
 ## Common Tasks
 
-### Add a New Assignment File
-1. Create a new `.cpp` file in the `multimedia/` directory
-2. Add it to the project: right-click on the project → Add → Existing Item
-3. Set other files to `ExcludedFromBuild=true` and leave the new file with `ExcludedFromBuild=false`
-4. Rebuild
+### Switch Active Build Target
+1. Edit `multimedia.vcxproj`
+2. Set desired file's `ExcludedFromBuild` to `false` (for Debug|Win32 configuration)
+3. Set all other files' `ExcludedFromBuild` to `true`
+4. Rebuild solution
 
-### Switch Active File for Building
-Edit `multimedia.vcxproj` and update the `ExcludedFromBuild` properties:
+**Example:** To switch to `assignment2_hint.cpp`:
 ```xml
-<!-- Exclude all others -->
-<ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-<!-- Enable your target -->
-<ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ExcludedFromBuild>
+<ClCompile Include="howtofindSSD.cpp">
+  <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+</ClCompile>
+<ClCompile Include="assignment2_hint.cpp">
+  <!-- No ExcludedFromBuild tag → defaults to false (included) -->
+</ClCompile>
 ```
 
-### Debug an Image Processing Operation
-- Use the `showImageFit()` function to display intermediate results with auto-scaling
-- Add `printf()` statements to trace values (e.g., edge positions, brightness values)
-- The debug output appears in the Visual Studio Output window or console
+### Debug SSD Alignment
+1. Add `printf()` to `alignB()` and `alignR()` to print offset and error values
+2. Visualize aligned channels before merging (display with `cvShowImage()`)
+3. Check boundary conditions: ensure offset + pixel coordinates stay within bounds
+4. Compare against known good implementations (e.g., `asdf.cpp`)
+
+### Test Different Images
+1. Update hard-coded path in `main()`: `cvLoadImage("c:\\path\\to\\image.jpg")`
+2. Ensure image format matches: Blue/Green/Red stacked vertically (3N height)
+3. Optionally adjust offset search range based on expected channel misalignment
+
+### Test Against Reference Implementations
+Compare `howtofindSSD.cpp` results against:
+- **`asdf.cpp`** — Simple baseline; validate core SSD logic
+- **`assignment2_hint.cpp`** — Full pipeline with boundary detection; check result quality
+- **`Assignment2_Summary.md`** — See which approach performed best
 
 ## Notes on Future Improvements
 
-The codebase is functional for learning image processing with OpenCV. When maintaining or extending:
-- Consider modernizing to OpenCV 4.x and the C++ Mat API if starting from scratch
-- The current IplImage API is suitable for educational purposes but is deprecated in modern OpenCV
-- Add error handling for image loading failures (currently only checks `!src1`)
-- The hard-coded image path should be made configurable (command-line argument or config file)
+- Consider modernizing to OpenCV 4.x and C++ Mat API for production use
+- Expand offset search range (currently ±100) if larger misalignments expected
+- Implement pyramid/coarse-to-fine search for faster alignment on large images
+- Add configurable boundary detection (variance-based vs. simple height/3)
+- Make image path and offset range command-line arguments
+- Add result image quality metrics (PSNR, SSIM) to validate alignment

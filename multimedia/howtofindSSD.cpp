@@ -1,478 +1,347 @@
-#include <opencv2/opencv.hpp>
-#include <stdio.h>
-#include <climits>
+#include<opencv2/opencv.hpp>
+#include<ctime>
+#include<cstring>
+#include<windows.h>
 
-const int SEARCH_RANGE = 15;
-const int MAX_BRIGHTNESS = 255;
-const int RGB_CHANNELS = 3;
-const int PROGRESS_INTERVAL = 50;
-const int SMOOTH_WINDOW = 7;
-const double VAR_THRESH_RATIO = 0.4;
-const int MAX_RUNS = 100;
 
-void calculateVarianceY(IplImage* img, double* varY);
-void smoothVariance(double* src, double* dst, int size, int window);
-void findVarianceYBoundaries(double* smoothed, int size, int* y1Out, int* y2Out);
-void findChannelBoundaries(IplImage* src, int* topY, int* bottomY);
-IplImage* splitChannel(IplImage* src, int yStart, int yEnd);
-long long computeSSD(IplImage* ref, IplImage* src, int dy, int dx);
-void findBestOffset(IplImage* ref, IplImage* src, const char* channelName,
-                    IplImage* previewDst, int* bestDy, int* bestDx);
-IplImage* createInitialMerge(IplImage* chB, IplImage* chG, IplImage* chR,
-                             int dyB, int dxB, int dyR, int dxR);
-IplImage* mergeChannels(IplImage* chB, IplImage* chG, IplImage* chR,
-                        int dyB, int dxB, int dyR, int dxR);
-void showImageFit(const char* windowName, IplImage* img, int maxWidth, int maxHeight);
-int orchestration(IplImage* src);
-
-// Step 1: Calculate Variance along Y-axis
-void calculateVarianceY(IplImage* img, double* varY)
+typedef struct
 {
-    int width = img->width;
-    int height = img->height;
+	int xOffset;
+	int yOffset;
+}OptimalOffset;
 
-    for (int y = 0; y < height; y++) {
-        // Calculate mean value
-        double sum = 0.0;
-        for (int x = 0; x < width; x++) {
-            CvScalar c = cvGet2D(img, y, x);
-            double brightness = (c.val[0] + c.val[1] + c.val[2]) / 3.0;
-            sum += brightness;
-        }
-        double mean = sum / width;
 
-        // Calculate variance
-        double sqSum = 0.0;
-        for (int x = 0; x < width; x++) {
-            CvScalar c = cvGet2D(img, y, x);
-            double brightness = (c.val[0] + c.val[1] + c.val[2]) / 3.0;
-            double diff = brightness - mean;
-            sqSum += diff * diff;
-        }
-        varY[y] = sqSum / width;
-    }
+OptimalOffset alignB(IplImage* greenChannel, IplImage* blueChannel);
+OptimalOffset alignR(IplImage* greenChannel, IplImage* redChannel);
+
+// Thread data structure for alignB
+typedef struct {
+	IplImage* greenChannel;
+	IplImage* blueChannel;
+	OptimalOffset result;
+}AlignBThreadData;
+
+// Thread data structure for alignR
+typedef struct {
+	IplImage* greenChannel;
+	IplImage* redChannel;
+	OptimalOffset result;
+}AlignRThreadData;
+
+// Thread function for alignB
+DWORD WINAPI alignBThread(LPVOID param) {
+	AlignBThreadData* data = (AlignBThreadData*)param;
+	data->result = alignB(data->greenChannel, data->blueChannel);
+	return 0;
 }
 
-// Step 2: Smooth variance
-void smoothVariance(double* src, double* dst, int size, int window)
-{
-    int half = window / 2;
-    for (int i = 0; i < size; i++) {
-        int start = (i - half > 0) ? (i - half) : 0;
-        int end = (i + half < size - 1) ? (i + half) : (size - 1);
-        double sum = 0.0;
-        int cnt = 0;
-        for (int j = start; j <= end; j++) {
-            sum += src[j];
-            cnt++;
-        }
-        dst[i] = (cnt > 0) ? (sum / cnt) : src[i];
-    }
+// Thread function for alignR
+DWORD WINAPI alignRThread(LPVOID param) {
+	AlignRThreadData* data = (AlignRThreadData*)param;
+	data->result = alignR(data->greenChannel, data->redChannel);
+	return 0;
 }
 
-// Step 3: Find boundaries based on variance
-void findVarianceYBoundaries(double* smoothed, int size, int* y1Out, int* y2Out)
-{
-    *y1Out = size / 3;
-    *y2Out = size * 2 / 3;
+// Helper function: Calculate SSD (Sum of Squared Differences) between two images
+// Optimized with direct pointer access (Method A) and integer arithmetic (Method C)
+double calculateSSD(IplImage* base, IplImage* target, int dx, int dy) {
+	int width = base->width;
+	int height = base->height;
 
-    double total = 0.0;
-    for (int i = 0; i < size; i++)
-        total += smoothed[i];
-    double mean = total / size;
-    double threshold = mean * VAR_THRESH_RATIO;
+	int startX = width / 4, endX = width * 3 / 4;
+	int startY = height / 4, endY = height * 3 / 4;
 
-    struct Run { int start, end, length; };
-    Run runs[MAX_RUNS];
-    int runCount = 0;
+	// Boundary pre-check: if offset moves ROI outside image, skip entirely
+	if ((startX + dx) < 0 || (endX - 1 + dx) >= width ||
+		(startY + dy) < 0 || (endY - 1 + dy) >= height)
+		return DBL_MAX;
 
-    int i = 0;
-    while (i < size && runCount < MAX_RUNS) {
-        if (smoothed[i] < threshold) {
-            int start = i;
-            while (i < size && smoothed[i] < threshold)
-                i++;
-            int end = i - 1;
-            runs[runCount].start = start;
-            runs[runCount].end = end;
-            runs[runCount].length = end - start + 1;
-            runCount++;
-        }
-        else {
-            i++;
-        }
-    }
+	long long sum = 0LL;
+	int count = 0;
 
-    if (runCount < 2) {
-        printf("[Variance] Detected %d runs. Using fallback: topY=%d, bottomY=%d\n",
-               runCount, *y1Out, *y2Out);
-        return;
-    }
+	// Cast imageData to uchar* for direct pixel access
+	const uchar* baseData = (const uchar*)base->imageData;
+	const uchar* targetData = (const uchar*)target->imageData;
+	int baseStep = base->widthStep;
+	int targetStep = target->widthStep;
 
-    for (int a = 0; a < 2 && a < runCount - 1; a++) {
-        int maxIdx = a;
-        for (int b = a + 1; b < runCount; b++) {
-            if (runs[b].length > runs[maxIdx].length)
-                maxIdx = b;
-        }
-        if (maxIdx != a) {
-            Run tmp = runs[a];
-            runs[a] = runs[maxIdx];
-            runs[maxIdx] = tmp;
-        }
-    }
+	for (int y = startY; y < endY; y++) {
+		const uchar* baseRow = baseData + y * baseStep;
+		const uchar* targetRow = targetData + (y + dy) * targetStep;
 
-    int centerA = (runs[0].start + runs[0].end) / 2;
-    int centerB = (runs[1].start + runs[1].end) / 2;
+		for (int x = startX; x < endX; x++) {
+			int base_val = baseRow[x];
+			int target_val = targetRow[x + dx];
+			int diff = base_val - target_val;
 
-    *y1Out = (centerA < centerB) ? centerA : centerB;
-    *y2Out = (centerA < centerB) ? centerB : centerA;
+			sum += (long long)diff * diff;
+			count += 1;
+		}
+	}
 
-    printf("[Variance] topY=%d, bottomY=%d\n", *y1Out, *y2Out);
+	return (double)sum / count;
 }
 
-// Step 4: Find channel boundaries
-void findChannelBoundaries(IplImage* src, int* topY, int* bottomY)
+// Align Blue channel to Green channel using SSD
+OptimalOffset alignB(IplImage* greenChannel, IplImage* blueChannel)
 {
-    printf("[Boundary] Analyzing image variance...\n");
+	int SEARCH_RANGE_X = 15, SEARCH_RANGE_Y = 35;
+	int alignX = 0, alignY = 0;
+	double minSsd = DBL_MAX;
 
-    int height = src->height;
-    double* varY = (double*)malloc(sizeof(double) * height);
-    double* smoothed = (double*)malloc(sizeof(double) * height);
+	// Step 1: Find best Y offset
+	printf("alignB: searching Y offset...\n");
+	for (int y = -SEARCH_RANGE_Y; y <= SEARCH_RANGE_Y; y++) {
+		double ssd = calculateSSD(greenChannel, blueChannel, 0, y);
 
-    calculateVarianceY(src, varY);
-    smoothVariance(varY, smoothed, height, SMOOTH_WINDOW);
-    findVarianceYBoundaries(smoothed, height, topY, bottomY);
+		if (ssd < minSsd) {
+			minSsd = ssd;
+			alignY = y;
+		}
+	}
 
-    free(varY);
-    free(smoothed);
+	minSsd = DBL_MAX;
+
+	// Step 2: Find best X offset
+	printf("alignB: searching X offset...\n");
+	for (int x = -SEARCH_RANGE_X; x <= SEARCH_RANGE_X; x++) {
+		double ssd = calculateSSD(greenChannel, blueChannel, x, alignY);
+
+		if (ssd < minSsd) {
+			minSsd = ssd;
+			alignX = x;
+		}
+	}
+
+	printf("alignB: best offset = (dx=%d, dy=%d)\n", alignX, alignY);
+	OptimalOffset result;
+	result.xOffset = alignX;
+	result.yOffset = alignY;
+	return result;
 }
 
-// Step 5: Split image channels
-IplImage* splitChannel(IplImage* src, int yStart, int yEnd)
+// Align Red channel to Green channel using SSD
+OptimalOffset alignR(IplImage* greenChannel, IplImage* redChannel)
 {
-    if (!src || yStart < 0 || yEnd > src->height || yStart >= yEnd)
-        return NULL;
+	int SEARCH_RANGE_X = 15, SEARCH_RANGE_Y = 35;
+	int alignX = 0, alignY = 0;
+	double minSsd = DBL_MAX;
 
-    int newH = yEnd - yStart;
-    int newW = src->width;
-    IplImage* dst = cvCreateImage(cvSize(newW, newH), src->depth, src->nChannels);
+	// Step 1: Find best Y offset
+	printf("alignR: searching Y offset...\n");
+	for (int y = -SEARCH_RANGE_Y; y <= SEARCH_RANGE_Y; y++) {
+		double ssd = calculateSSD(greenChannel, redChannel, 0, y);
 
-    for (int y = 0; y < newH; y++) {
-        for (int x = 0; x < newW; x++) {
-            CvScalar c = cvGet2D(src, y + yStart, x);
-            cvSet2D(dst, y, x, c);
-        }
-    }
-    return dst;
+		if (ssd < minSsd) {
+			minSsd = ssd;
+			alignY = y;
+		}
+	}
+
+	minSsd = DBL_MAX;
+
+	// Step 2: Find best X offset
+	printf("alignR: searching X offset...\n");
+	for (int x = -SEARCH_RANGE_X; x <= SEARCH_RANGE_X; x++) {
+		double ssd = calculateSSD(greenChannel, redChannel, x, alignY);
+
+		if (ssd < minSsd) {
+			minSsd = ssd;
+			alignX = x;
+		}
+	}
+
+	printf("alignR: best offset = (dx=%d, dy=%d)\n", alignX, alignY);
+	OptimalOffset result;
+	result.xOffset = alignX;
+	result.yOffset = alignY;
+	return result;
 }
 
-// ========== SSD Calculation Function ==========
-// Step 6: Calculate SSD (Sum of Squared Differences)
-long long computeSSD(IplImage* ref, IplImage* src, int dy, int dx)
-{
-    int refH = ref->height, refW = ref->width;
-    int srcH = src->height, srcW = src->width;
 
-    long long ssd = 0;
-
-    // Iterate through all pixels of ref image
-    for (int y = 0; y < refH; y++) {
-        int sy = y + dy;  // Y coordinate with offset in source image
-        if (sy < 0 || sy >= srcH) continue;  // Skip if out of bounds
-
-        for (int x = 0; x < refW; x++) {
-            int sx = x + dx;  // X coordinate with offset in source image
-            if (sx < 0 || sx >= srcW) continue;  // Skip if out of bounds
-
-            // Read pixel value from ref image
-            CvScalar cr = cvGet2D(ref, y, x);
-            // Read offset pixel value from source image
-            CvScalar cs = cvGet2D(src, sy, sx);
-
-            // Calculate pixel value difference
-            double diff = cr.val[0] - cs.val[0];
-            // Square difference and accumulate
-            ssd += (long long)(diff * diff);
-        }
-    }
-    return ssd;
-}
-
-// Step 7: Find optimal offset using SSD-based alignment
-void findBestOffset(IplImage* ref, IplImage* src, const char* channelName,
-                    IplImage* previewDst, int* bestDy, int* bestDx)
-{
-    long long bestSSD = LLONG_MAX;
-    *bestDy = 0;
-    *bestDx = 0;
-
-    int totalIterations = (2 * SEARCH_RANGE + 1) * (2 * SEARCH_RANGE + 1);
-    int currentIter = 0;
-
-    printf("\n[Align] Starting SSD search for %s channel (Range: +/-%d)...\n",
-           channelName, SEARCH_RANGE);
-    printf("[Align] Total iterations: %d\n", totalIterations);
-
-    // Calculate SSD for all possible offsets
-    for (int dy = -SEARCH_RANGE; dy <= SEARCH_RANGE; dy++) {
-        for (int dx = -SEARCH_RANGE; dx <= SEARCH_RANGE; dx++) {
-            // Calculate SSD value
-            long long ssd = computeSSD(ref, src, dy, dx);
-
-            // Update if smaller SSD value is found
-            if (ssd < bestSSD) {
-                bestSSD = ssd;
-                *bestDy = dy;
-                *bestDx = dx;
-
-                // Update real-time preview
-                IplImage* tempMerge = createInitialMerge(src, ref, src, dy, dx, 0, 0);
-                if (tempMerge && previewDst) {
-                    for (int y = 0; y < previewDst->height && y < tempMerge->height; y++) {
-                        for (int x = 0; x < previewDst->width && x < tempMerge->width; x++) {
-                            CvScalar c = cvGet2D(tempMerge, y, x);
-                            cvSet2D(previewDst, y, x, c);
-                        }
-                    }
-                    cvShowImage(channelName, previewDst);
-                    cvWaitKey(1);
-                }
-                if (tempMerge) cvReleaseImage(&tempMerge);
-            }
-
-            currentIter++;
-            if (currentIter % PROGRESS_INTERVAL == 0) {
-                int percent = (currentIter * 100) / totalIterations;
-                printf("[Align] Progress: %d%% (%d/%d) - Current Best: dy=%d, dx=%d, SSD=%lld\n",
-                    percent, currentIter, totalIterations, *bestDy, *bestDx, bestSSD);
-            }
-        }
-    }
-    printf("[Align] ===== FINAL RESULT for %s =====\n", channelName);
-    printf("[Align] Best Offset: dy=%d, dx=%d (SSD=%lld)\n",
-        *bestDy, *bestDx, bestSSD);
-}
-
-// Step 8: Initial merge (for preview)
-IplImage* createInitialMerge(IplImage* chB, IplImage* chG, IplImage* chR,
-                             int dyB, int dxB, int dyR, int dxR)
-{
-    if (!chG) return NULL;
-
-    int H = chG->height;
-    int W = chG->width;
-    IplImage* dst = cvCreateImage(cvSize(W, H), 8, RGB_CHANNELS);
-    cvSet(dst, cvScalar(0, 0, 0));
-
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            CvScalar g = cvGet2D(chG, y, x);
-            double gVal = g.val[0];
-
-            double bVal = 0.0;
-            int by = y + dyB, bx = x + dxB;
-            if (by >= 0 && by < chB->height && bx >= 0 && bx < chB->width) {
-                CvScalar b = cvGet2D(chB, by, bx);
-                bVal = b.val[0];
-            }
-
-            double rVal = 0.0;
-            int ry = y + dyR, rx = x + dxR;
-            if (ry >= 0 && ry < chR->height && rx >= 0 && rx < chR->width) {
-                CvScalar r = cvGet2D(chR, ry, rx);
-                rVal = r.val[0];
-            }
-
-            cvSet2D(dst, y, x, cvScalar(bVal, gVal, rVal));
-        }
-    }
-    return dst;
-}
-
-// Step 9: Final channel merge
-IplImage* mergeChannels(IplImage* chB, IplImage* chG, IplImage* chR,
-                        int dyB, int dxB, int dyR, int dxR)
-{
-    int H = chG->height;
-    int W = chG->width;
-
-    printf("\n[Merge] Creating final merged image with offsets:\n");
-    printf("[Merge]   Blue: dy=%d, dx=%d\n", dyB, dxB);
-    printf("[Merge]   Red:  dy=%d, dx=%d\n", dyR, dxR);
-
-    IplImage* dst = cvCreateImage(cvSize(W, H), 8, RGB_CHANNELS);
-    cvSet(dst, cvScalar(0, 0, 0));
-
-    printf("[Merge] Processing pixels: ");
-    for (int y = 0; y < H; y++) {
-        if (y % (H / 10) == 0) {
-            printf("%d%% ", (y * 100) / H);
-            fflush(stdout);
-        }
-
-        for (int x = 0; x < W; x++) {
-            // Green (Reference, no offset)
-            CvScalar g = cvGet2D(chG, y, x);
-
-            // Blue (Apply offset, check bounds)
-            double bVal = 0.0;
-            int by = y + dyB, bx = x + dxB;
-            if (by >= 0 && by < chB->height && bx >= 0 && bx < chB->width) {
-                CvScalar b = cvGet2D(chB, by, bx);
-                bVal = b.val[0];
-            }
-
-            // Red (Apply offset, check bounds)
-            double rVal = 0.0;
-            int ry = y + dyR, rx = x + dxR;
-            if (ry >= 0 && ry < chR->height && rx >= 0 && rx < chR->width) {
-                CvScalar r = cvGet2D(chR, ry, rx);
-                rVal = r.val[0];
-            }
-
-            // OpenCV BGR order: (B, G, R)
-            cvSet2D(dst, y, x, cvScalar(bVal, g.val[0], rVal));
-        }
-    }
-    printf("100%%\n");
-    printf("[Merge] Image merge completed.\n");
-    return dst;
-}
-
-// Step 10: Display image (scale to fit screen)
-void showImageFit(const char* windowName, IplImage* img,
-    int maxWidth, int maxHeight)
-{
-    float scaleW = (float)maxWidth / img->width;
-    float scaleH = (float)maxHeight / img->height;
-    float scale = (scaleW < scaleH) ? scaleW : scaleH;
-
-    if (scale < 1.0f) {
-        IplImage* resized = cvCreateImage(
-            cvSize((int)(img->width * scale), (int)(img->height * scale)),
-            img->depth, img->nChannels);
-        cvResize(img, resized, CV_INTER_LINEAR);
-        cvShowImage(windowName, resized);
-        cvResizeWindow(windowName, resized->width, resized->height);
-        cvReleaseImage(&resized);
-    }
-    else {
-        cvShowImage(windowName, img);
-        cvResizeWindow(windowName, img->width, img->height);
-    }
-}
-
-// Step 11: Orchestrate the entire pipeline
-int orchestration(IplImage* src)
-{
-    if (!src) {
-        printf("[ERROR] Source image is NULL.\n");
-        return -1;
-    }
-
-    CvSize size = cvGetSize(src);
-    printf("\n========== OPTIMIZED CHANNEL ALIGNMENT PIPELINE ==========\n\n");
-
-    printf("[STEP 1] Image Information\n");
-    printf("  Dimensions: %d x %d pixels\n", size.width, size.height);
-
-    printf("\n[STEP 2] Detect Channel Boundaries using Variance\n");
-    int topY, bottomY;
-    findChannelBoundaries(src, &topY, &bottomY);
-
-    if (topY <= 0 || bottomY <= topY || bottomY >= size.height) {
-        printf("[INFO] Invalid boundaries. Using fallback (height/3).\n");
-        topY = size.height / 3;
-        bottomY = size.height * 2 / 3;
-    }
-    printf("  Blue:  [0, %d)\n", topY);
-    printf("  Green: [%d, %d)\n", topY, bottomY);
-    printf("  Red:   [%d, %d)\n", bottomY, size.height);
-
-    IplImage* chB = splitChannel(src, 0, topY);
-    IplImage* chG = splitChannel(src, topY, bottomY);
-    IplImage* chR = splitChannel(src, bottomY, size.height);
-
-    if (!chB || !chG || !chR) {
-        printf("[ERROR] Channel splitting failed.\n");
-        if (chB) cvReleaseImage(&chB);
-        if (chG) cvReleaseImage(&chG);
-        if (chR) cvReleaseImage(&chR);
-        return -1;
-    }
-    printf("  OK: Blue channel split\n");
-    printf("  OK: Green channel split\n");
-    printf("  OK: Red channel split\n");
-
-    printf("\n[STEP 3] Display Split Channels\n");
-    showImageFit("Blue Channel", chB, 800, 600);
-    showImageFit("Green Channel (Reference)", chG, 800, 600);
-    showImageFit("Red Channel", chR, 800, 600);
-
-    printf("\n[STEP 4] SSD-based Channel Alignment\n");
-    printf("  Using Green channel as reference (no offset)\n");
-
-    IplImage* previewBlue = cvCreateImage(cvSize(chB->width, chB->height), 8, RGB_CHANNELS);
-    IplImage* previewRed = cvCreateImage(cvSize(chR->width, chR->height), 8, RGB_CHANNELS);
-    cvSet(previewBlue, cvScalar(0, 0, 0));
-    cvSet(previewRed, cvScalar(0, 0, 0));
-
-    int bestDy_B = 0, bestDx_B = 0;
-    int bestDy_R = 0, bestDx_R = 0;
-
-    findBestOffset(chG, chB, "Blue Channel (Real-time)", previewBlue, &bestDy_B, &bestDx_B);
-    findBestOffset(chG, chR, "Red Channel (Real-time)", previewRed, &bestDy_R, &bestDx_R);
-
-    cvReleaseImage(&previewBlue);
-    cvReleaseImage(&previewRed);
-
-    printf("\n[STEP 5] Final Synthesis\n");
-    IplImage* result = mergeChannels(chB, chG, chR, bestDy_B, bestDx_B, bestDy_R, bestDx_R);
-
-    if (result) {
-        printf("[STEP 6] Display Final Result\n");
-        cvShowImage("Aligned and Merged Result", result);
-        printf("  OK: Result image displayed.\n");
-        cvReleaseImage(&result);
-    }
-
-    printf("\n[STEP 7] Cleanup\n");
-    cvReleaseImage(&chB);
-    cvReleaseImage(&chG);
-    cvReleaseImage(&chR);
-    printf("  OK: All resources released.\n");
-
-    printf("\n========== PIPELINE COMPLETE ==========\n\n");
-    return 0;
-}
-
-// Main function
 int main()
 {
-    printf("\n");
-    printf("========== PROKUDIN-GORSKY COLOR RESTORATION (v1.0) ==========\n");
-    printf("SSD-based Channel Alignment and RGB Merge\n");
-    printf("============================================================\n\n");
+	// Start timing
+	clock_t totalStart = clock();
 
-    printf("[LOAD] Reading image from: c:\\MultiMedia\\AS2\\pg1.jpg\n");
+	printf("Test CV\n");
+	char imagePath[256];
+	printf("Enter image path: ");
+	fgets(imagePath, sizeof(imagePath), stdin);
 
-    IplImage* src = cvLoadImage("c:\\MultiMedia\\AS2\\pg1.jpg");
-    if (!src) {
-        printf("[ERROR] Could not load image.\n");
-        printf("[ERROR] Path: c:\\MultiMedia\\AS2\\pg1.jpg\n");
-        printf("[ERROR] Please verify the file exists and is readable.\n");
-        return -1;
-    }
+	// Remove trailing newline
+	int len = strlen(imagePath);
+	if (len > 0 && imagePath[len - 1] == '\n') {
+		imagePath[len - 1] = '\0';
+	}
 
-    printf("[LOAD] OK: Image loaded successfully.\n");
+	// Load image
+	clock_t loadStart = clock();
+	IplImage* src = cvLoadImage(imagePath);
+	clock_t loadEnd = clock();
+	double loadTime_ms = ((double)(loadEnd - loadStart) / CLOCKS_PER_SEC) * 1000;
 
-    int result = orchestration(src);
+	if (!src) {
+		printf("Error: Cannot load image from path: %s\n", imagePath);
+		return -1;
+	}
+	printf("Image load time: %.2f ms\n", loadTime_ms);
 
-    cvReleaseImage(&src);
+	int width = src->width;
+	int height = src->height / 3;
 
-    printf("[WAIT] Press any key in the image window to exit...\n");
-    cvWaitKey(0);
+	// Create channel images
+	clock_t allocStart = clock();
+	IplImage* dest = cvCreateImage(cvSize(width, height), 8, 3);
+	IplImage* blueChannel = cvCreateImage(cvSize(width, height), 8, 1);
+	IplImage* greenChannel = cvCreateImage(cvSize(width, height), 8, 1);
+	IplImage* redChannel = cvCreateImage(cvSize(width, height), 8, 1);
+	clock_t allocEnd = clock();
+	double allocTime_ms = ((double)(allocEnd - allocStart) / CLOCKS_PER_SEC) * 1000;
+	printf("Memory allocation time: %.2f ms\n", allocTime_ms);
 
-    return result;
+	// Split channels from stacked image using direct pointer access (Method A)
+	printf("Splitting channels...\n");
+	clock_t splitStart = clock();
+
+	const uchar* srcData = (const uchar*)src->imageData;
+	int srcStep = src->widthStep;
+	uchar* blueData = (uchar*)blueChannel->imageData;
+	uchar* greenData = (uchar*)greenChannel->imageData;
+	uchar* redData = (uchar*)redChannel->imageData;
+	int dstStep = blueChannel->widthStep;
+
+	// Split BGR channels from stacked image (3-byte channel extraction)
+	for (int y = 0; y < height; y++) {
+		const uchar* srcBlueRow = srcData + y * srcStep;
+		const uchar* srcGreenRow = srcData + (y + height) * srcStep;
+		const uchar* srcRedRow = srcData + (y + height * 2) * srcStep;
+
+		uchar* dstBlueRow = blueData + y * dstStep;
+		uchar* dstGreenRow = greenData + y * dstStep;
+		uchar* dstRedRow = redData + y * dstStep;
+
+		// Extract individual channels from BGR interleaved format
+		for (int x = 0; x < width; x++) {
+			dstBlueRow[x]  = srcBlueRow[x * 3 + 0];  // B channel
+			dstGreenRow[x] = srcGreenRow[x * 3 + 1]; // G channel
+			dstRedRow[x]   = srcRedRow[x * 3 + 2];   // R channel
+		}
+	}
+
+	clock_t splitEnd = clock();
+	double splitTime_ms = ((double)(splitEnd - splitStart) / CLOCKS_PER_SEC) * 1000;
+	printf("Split time: %.2f ms\n", splitTime_ms);
+
+	// Align Blue and Red channels to Green channel (Method B: Multi-threading with CreateThread)
+	clock_t alignStart = clock();
+
+	AlignBThreadData dataB;
+	dataB.greenChannel = greenChannel;
+	dataB.blueChannel = blueChannel;
+
+	AlignRThreadData dataR;
+	dataR.greenChannel = greenChannel;
+	dataR.redChannel = redChannel;
+
+	HANDLE hThreadB = CreateThread(NULL, 0, alignBThread, &dataB, 0, NULL);
+	HANDLE hThreadR = CreateThread(NULL, 0, alignRThread, &dataR, 0, NULL);
+
+	if (hThreadB == NULL || hThreadR == NULL) {
+		printf("Error: Failed to create threads\n");
+		return -1;
+	}
+
+	WaitForSingleObject(hThreadB, INFINITE);
+	WaitForSingleObject(hThreadR, INFINITE);
+
+	CloseHandle(hThreadB);
+	CloseHandle(hThreadR);
+
+	OptimalOffset offsetB = dataB.result;
+	OptimalOffset offsetR = dataR.result;
+
+	clock_t alignEnd = clock();
+	double alignTime_ms = ((double)(alignEnd - alignStart) / CLOCKS_PER_SEC) * 1000;
+	printf("Alignment time: %.2f ms\n", alignTime_ms);
+
+	// Merge aligned channels into RGB image using direct pointer access (Method A)
+	printf("Merging channels...\n");
+	clock_t mergeStart = clock();
+
+	const uchar* blueDataM = (const uchar*)blueChannel->imageData;
+	const uchar* greenDataM = (const uchar*)greenChannel->imageData;
+	const uchar* redDataM = (const uchar*)redChannel->imageData;
+	uchar* destDataM = (uchar*)dest->imageData;
+
+	int blueStepM = blueChannel->widthStep;
+	int greenStepM = greenChannel->widthStep;
+	int redStepM = redChannel->widthStep;
+	int destStepM = dest->widthStep;
+
+	for (int y = 0; y < dest->height; y++) {
+		const uchar* blueRow = blueDataM + y * blueStepM;
+		const uchar* greenRow = greenDataM + y * greenStepM;
+		const uchar* redRow = redDataM + y * redStepM;
+		uchar* destRow = destDataM + y * destStepM;
+
+		for (int x = 0; x < dest->width; x++) {
+			// Green (Reference, no offset)
+			uchar gVal = greenRow[x];
+
+			// Blue (Apply offset, check bounds)
+			int bx = x + offsetB.xOffset;
+			int by = y + offsetB.yOffset;
+			uchar bVal = 0;
+			if (bx >= 0 && bx < width && by >= 0 && by < height) {
+				bVal = blueDataM[by * blueStepM + bx];
+			}
+
+			// Red (Apply offset, check bounds)
+			int rx = x + offsetR.xOffset;
+			int ry = y + offsetR.yOffset;
+			uchar rVal = 0;
+			if (rx >= 0 && rx < width && ry >= 0 && ry < height) {
+				rVal = redDataM[ry * redStepM + rx];
+			}
+
+			// Set RGB values in destination (BGR order for OpenCV)
+			destRow[x * 3 + 0] = bVal;  // B
+			destRow[x * 3 + 1] = gVal;  // G
+			destRow[x * 3 + 2] = rVal;  // R
+		}
+	}
+
+	clock_t mergeEnd = clock();
+	double mergeTime_ms = ((double)(mergeEnd - mergeStart) / CLOCKS_PER_SEC) * 1000;
+	printf("Merge time: %.2f ms\n", mergeTime_ms);
+
+	cvShowImage("Original", src);
+	cvShowImage("Result", dest);
+
+	// End timing and calculate elapsed time
+	clock_t totalEnd = clock();
+	double totalTime_ms = ((double)(totalEnd - totalStart) / CLOCKS_PER_SEC) * 1000;
+
+	printf("\n");
+	printf("================== Performance Summary ==================\n");
+	printf("Image load time:       %.2f ms\n", loadTime_ms);
+	printf("Memory allocation:     %.2f ms\n", allocTime_ms);
+	printf("Channel split time:    %.2f ms\n", splitTime_ms);
+	printf("Alignment time:        %.2f ms\n", alignTime_ms);
+	printf("Merge time:            %.2f ms\n", mergeTime_ms);
+	printf("========================================================\n");
+	printf("Total time (input to display): %.2f ms\n", totalTime_ms);
+	printf("========================================================\n");
+
+	cvWaitKey();
+
+	// Clean up
+	cvReleaseImage(&src);
+	cvReleaseImage(&dest);
+	cvReleaseImage(&blueChannel);
+	cvReleaseImage(&greenChannel);
+	cvReleaseImage(&redChannel);
+
+	return 0;
 }

@@ -78,5 +78,8 @@
     <ClCompile Include="howtofindSSD.cpp">
       <Filter>소스 파일\notebook</Filter>
     </ClCompile>
+    <ClCompile Include="week5-2.cpp">
+      <Filter>소스 파일\Lec</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
