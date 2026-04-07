@@ -1,24 +1,24 @@
-# Performance Optimization Documentation
+# 성능 최적화 문서
 
-**File:** `multimedia/howtofindSSD.cpp`  
-**Date:** 2026-04-02  
-**Optimization Phases:** Phase 1 (Direct Pointer Access) + Phase 2 (Multi-threading)
+**파일:** `multimedia/howtofindSSD.cpp`  
+**작성일:** 2026-04-02  
+**최적화 단계:** Phase 1 (직접 포인터 접근) + Phase 2 (멀티스레딩)
 
 ---
 
-## Executive Summary
+## 요약
 
 성능 최적화를 통해 **50초 → 약 500ms** 수준의 **100배 이상 속도 향상**을 달성했습니다.
 
 | 단계 | 예상 시간 (W=3000, H=1000) | 배율 |
 |------|--------------------------|------|
 | 원본 | ~50s | 1x |
-| Phase 1 (포인터 접근) | ~930ms | **54x** |
-| Phase 2 (멀티스레딩 추가) | ~480ms | **104x** |
+| Phase 1 (포인터 접근) | ~930ms | **54배** |
+| Phase 2 (멀티스레딩 추가) | ~480ms | **104배** |
 
 ---
 
-## Phase 1: Direct Pointer Access (Method A + C + D)
+## Phase 1: 직접 포인터 접근 (방법 A + C + D)
 
 ### 1.1 문제점: cvGet2D의 성능 병목
 
@@ -98,7 +98,7 @@ double calculateSSD(IplImage* base, IplImage* target, int dx, int dy) {
 }
 ```
 
-**성능:** ~45.9s (W=3000, H=1000)
+**성능:** ~45.9초 (W=3000, H=1000)
 
 ---
 
@@ -111,15 +111,15 @@ double calculateSSD(IplImage* base, IplImage* target, int dx, int dy) {
     int startX = width / 4, endX = width * 3 / 4;
     int startY = height / 4, endY = height * 3 / 4;
 
-    // Boundary pre-check: 루프 내 분기 제거 (Method D)
+    // 경계 사전 검사: 루프 내 분기 제거 (방법 D)
     if ((startX + dx) < 0 || (endX - 1 + dx) >= width ||
         (startY + dy) < 0 || (endY - 1 + dy) >= height)
         return DBL_MAX;
 
-    long long sum = 0LL;  // Method C: int → long long
+    long long sum = 0LL;  // 방법 C: int → long long
     int count = 0;
 
-    // 포인터 직접 접근 (Method A)
+    // 포인터 직접 접근 (방법 A)
     const uchar* baseData = (const uchar*)base->imageData;
     const uchar* targetData = (const uchar*)target->imageData;
     int baseStep = base->widthStep;
@@ -167,7 +167,7 @@ for (int y = 0; y < height; y++) {
 }
 ```
 
-**성능:** ~2.7s (W=3000, H=1000)
+**성능:** ~2.7초 (W=3000, H=1000)
 
 ---
 
@@ -230,14 +230,14 @@ for (int y = 0; y < dest->height; y++) {
             bVal = cvGet2D(blueChannel, by, bx).val[0];
         }
         
-        // ... red channel 처리 ...
+        // ... 레드 채널 처리 ...
         
         cvSet2D(dest, y, x, cvScalar(bVal, g.val[0], rVal));
     }
 }
 ```
 
-**성능:** ~1.8s
+**성능:** ~1.8초
 
 ---
 
@@ -323,7 +323,7 @@ long long 범위: -9.2×10¹⁸ ~ +9.2×10¹⁸  → 안전 ✅
 
 ---
 
-## Phase 2: Multi-threading (Method B)
+## Phase 2: 멀티스레딩 (방법 B)
 
 ### 2.1 문제점: 순차 처리의 비효율
 
@@ -414,7 +414,7 @@ HANDLE hThreadB = CreateThread(NULL, 0, alignBThread, &dataB, 0, NULL);
 HANDLE hThreadR = CreateThread(NULL, 0, alignRThread, &dataR, 0, NULL);
 
 if (hThreadB == NULL || hThreadR == NULL) {
-    printf("Error: Failed to create threads\n");
+    printf("오류: 스레드 생성 실패\n");
     return -1;
 }
 
@@ -488,23 +488,23 @@ threadR 쓰기:   dataR.result
 
 | 단계 | 현재 (cvGet2D) | Phase 1 (포인터) | Phase 2 (멀티스레딩) | 배율 |
 |------|----------|-----------|------------|------|
-| split | 2.7s | 15ms | 15ms | 180x |
-| calculateSSD | 45.9s | 900ms | 450ms | 102x |
-| merge | 1.8s | 15ms | 15ms | 120x |
-| **합계** | **~50s** | **~930ms** | **~480ms** | **~104x** |
+| split | 2.7초 | 15ms | 15ms | 180배 |
+| calculateSSD | 45.9초 | 900ms | 450ms | 102배 |
+| merge | 1.8초 | 15ms | 15ms | 120배 |
+| **합계** | **~50초** | **~930ms** | **~480ms** | **~104배** |
 
 ---
 
 ## 적용된 최적화 기법 체크리스트
 
-### Phase 1: Direct Pointer Access
+### Phase 1: 직접 포인터 접근
 - [x] cvGet2D → IplImage 직접 포인터 접근
 - [x] cvSet2D → 직접 바이트 쓰기
 - [x] double → int/long long 정수 연산
 - [x] widthStep 외부 계산 (루프 최적화)
 - [x] 경계 검사 사전 처리 (분기 제거)
 
-### Phase 2: Multi-threading
+### Phase 2: 멀티스레딩
 - [x] Windows API CreateThread 사용
 - [x] alignB/alignR 병렬 실행
 - [x] Race condition 없음 확인
@@ -517,9 +517,9 @@ threadR 쓰기:   dataR.result
 
 | 방법 | 배율 | 복잡도 |
 |------|-----|--------|
-| 피라미드 탐색 (Gaussian Pyramid) | 2~4x | 중간 |
-| 조기 종료 (Early Termination) | 1.3~1.4x | 낮음 |
-| OpenMP 병렬화 (다중 코어) | 2~4x | 낮음 |
+| 피라미드 탐색 (Gaussian Pyramid) | 2~4배 | 중간 |
+| 조기 종료 (Early Termination) | 1.3~1.4배 | 낮음 |
+| OpenMP 병렬화 (다중 코어) | 2~4배 | 낮음 |
 
 ---
 
@@ -538,14 +538,14 @@ msbuild multimedia.sln /p:Configuration=Debug /p:Platform=x64
 
 ### Performance Summary 출력 예시
 ```
-================== Performance Summary ==================
-Image load time:       45.23 ms
-Memory allocation:     12.55 ms
-Channel split time:    15.34 ms
-Alignment time:        480.21 ms
-Merge time:            14.87 ms
+================== 성능 요약 ==================
+이미지 로드 시간:       45.23 ms
+메모리 할당:           12.55 ms
+채널 분리 시간:        15.34 ms
+정렬 시간:             480.21 ms
+병합 시간:             14.87 ms
 ========================================================
-Total time (input to display): 568.20 ms
+총 시간 (입력부터 출력까지): 568.20 ms
 ========================================================
 ```
 
@@ -553,7 +553,6 @@ Total time (input to display): 568.20 ms
 
 ## 참고 자료
 
-- [OpenCV 2.3.0 IplImage API Documentation](https://docs.opencv.org/2.3.0/)
-- [Windows CreateThread Documentation](https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread)
-- [Memory Layout and Cache Optimization](https://en.wikichip.org/wiki/memory_hierarchy)
-
+- [OpenCV 2.3.0 IplImage API 문서](https://docs.opencv.org/2.3.0/)
+- [Windows CreateThread 문서](https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread)
+- [메모리 계층 및 캐시 최적화](https://en.wikichip.org/wiki/memory_hierarchy)

@@ -69,17 +69,20 @@
     <ClCompile Include="DP_Assignment1.cpp">
       <Filter>소스 파일\AS\1</Filter>
     </ClCompile>
-    <ClCompile Include="asdf.cpp">
-      <Filter>소스 파일\notebook</Filter>
-    </ClCompile>
     <ClCompile Include="assignment2_hint.cpp">
       <Filter>소스 파일\AS\2</Filter>
     </ClCompile>
-    <ClCompile Include="howtofindSSD.cpp">
-      <Filter>소스 파일\notebook</Filter>
-    </ClCompile>
     <ClCompile Include="week5-2.cpp">
       <Filter>소스 파일\Lec</Filter>
+    </ClCompile>
+    <ClCompile Include="BruteForce_SSD_Alignment.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="HW2.cpp">
+      <Filter>소스 파일\AS\2</Filter>
+    </ClCompile>
+    <ClCompile Include="asdf.cpp">
+      <Filter>소스 파일\AS\2</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
