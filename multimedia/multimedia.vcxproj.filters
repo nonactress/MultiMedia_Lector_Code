@@ -84,5 +84,8 @@
     <ClCompile Include="asdf.cpp">
       <Filter>소스 파일\AS\2</Filter>
     </ClCompile>
+    <ClCompile Include="week6-2.cpp">
+      <Filter>소스 파일\Lec</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
