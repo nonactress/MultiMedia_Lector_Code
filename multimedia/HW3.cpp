@@ -30,7 +30,8 @@ void myFastestMeanFilter(IplImage* src, IplImage* dst, int k)
 }
 CvScalar getSmooth(int x,int y,int* r[], int* g[], int* b[], IplImage* img,int k)
 {
-	int offset = 0;
+	int offsetX = 0;
+	int offsetY = 0;
 	CvSize size = cvGetSize(img);
 
 	int minDx = x - k/2;
@@ -41,28 +42,34 @@ CvScalar getSmooth(int x,int y,int* r[], int* g[], int* b[], IplImage* img,int k
 
 	if (minDx < 0)
 	{
-		offset = -minDx;
+		offsetX= -minDx;
 		minDx = 0;
 		
 	}
-	if (minDy < 0) minDy = 0;
+	if (minDy < 0) { 
+		offsetY = -minDy;
+		minDy = 0; }
 
 	if (maxDx > size.width - 1)
 	{ 
-		offset = maxDx - (size.width - 1);
+		offsetX = maxDx - (size.width - 1);
 		maxDx = size.width - 1;
 	}
-	if (maxDy > size.height-1 ) maxDy = size.height-1;
+	if (maxDy > size.height - 1)
+	{
+		offsetY = maxDy - (size.height - 1);
+		maxDy = size.height - 1;
+	}
 
-	int area = (k - offset) * (k - offset);
+	int area = (k - offsetX) * (k - offsetY);
 	if (area == 0) return cvScalar(0, 0, 0);
 
 	int meanB = (b[maxDy][maxDx] - b[minDy][maxDx] - b[maxDy][minDx] + b[minDy][minDx]) / area;
 	int meanG = (g[maxDy][maxDx] - g[minDy][maxDx] - g[maxDy][minDx] + g[minDy][minDx]) / area;
 	int meanR = (r[maxDy][maxDx] - r[minDy][maxDx] - r[maxDy][minDx] + r[minDy][minDx]) / area;
 
-	if(x==0 && y==0 )printf("now pos(%d, %d) ,area %d  , offset : %d, k = %d \n", x, y, area, offset, k / 2);
-	if (offset != 0) printf("now pos(%d, %d) ,area %d  , offset : %d, k = %d \n", x,y,area , offset, k/2);
+	//if(x==0 && y==0 )printf("now pos(%d, %d) ,area %d  , offset : %d, k = %d \n", x, y, area, offset, k / 2);
+	//if (offset != 0) printf("now pos(%d, %d) ,area %d  , offset : %d, k = %d \n", x,y,area , offset, k/2);
  
 	return cvScalar(meanB, meanG, meanR);
 }
